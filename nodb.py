@@ -44,7 +44,7 @@ import json
 import fcntl
 import weakref
 
-def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
+#def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
 
 def resolve(path, name):
 	return os.path.realpath(os.path.join(path, name))
@@ -148,7 +148,6 @@ class Entrydata:
 		self.o		= o[key]
 		self.key	= key
 		self.map	= weakref.WeakValueDictionary()
-		LOG('E', key, o)
 
 	def get(self, key, default):
 		if key not in self.o:
@@ -192,12 +191,11 @@ class Entrydata:
 			self.parent.dirt(self.key+'.'+key)
 
 	def ob(self):
-		LOG('Eo', self.o)
 		return self.o
 
 class DBdata:
 	def __init__(self, db, parent, store, flags):
-		self.db	= db
+		self.db		= db
 		self.parent	= parent
 		self.store	= store
 		self.flags	= flags
@@ -234,6 +232,7 @@ class DBdata:
 		self.unregister()
 
 	def unregister(self):
+		self.parent.unregister(self.db)
 		self.store	= None
 
 # Helpers for the proxy to access the underlying class instance
@@ -294,6 +293,8 @@ class DB:
 
 
 class NoDB:
+	storage	= Storage
+
 	def __init__(self, path=None, **flags):
 		if path is None: path='.'
 		self._dbs	= []
@@ -307,6 +308,9 @@ class NoDB:
 		d	= DB(self, store, self._flag(flags))
 		self._dbs.append(d)
 		return d
+
+	def unregister(self, db):
+		self._dbs.remove(db)
 
 	def flush(self, db=None, flags=None):
 		flags	= self._flag(flags)
@@ -345,7 +349,7 @@ class NoDB:
 			assert self._store[name] is st
 			del self._store[name]
 
-		st			= Storage(name, unregister)
+		st			= self.storage(name, unregister)
 		self._store[name]	= st
 		return st
 
