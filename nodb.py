@@ -44,7 +44,15 @@ import json
 import fcntl
 import weakref
 
-#def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
+DEBUG=False
+
+def LOG(*args):
+	if DEBUG:
+		print(*args, file=sys.stderr)
+		sys.stderr.flush()
+
+def debugstr(*args):
+	return '['+' '.join([str(a) for a in args])+']'
 
 def resolve(path, name):
 	return os.path.realpath(os.path.join(path, name))
@@ -88,14 +96,28 @@ class Flags:
 	force	= False
 
 	def __init__(self, flags):
-		self(flags)
+		self.__set(flags)
+
+	def __set(self, flags):
+		if not flags:
+			return
+		if isinstance(flags, Flags):
+			for a in dir(flags):
+				if a[0]=='_': continue
+				assert hasattr(self, a), 'unknown flag: '+a
+				setattr(self, a, getattr(flags, a))
+			return self
+
+		for a in flags:
+			assert hasattr(self, a), 'unknown flag: '+a
+			setattr(self, a, flags[a])
+		return self
 
 	def __call__(self, flags):
-		if flags:
-			for a in flags:
-				assert hasattr(self, a), 'unknown flag: '+a
-				setattr(self, a, flags[a])
-		return self
+		return flags and Flags(self).__set(flags) or self
+
+	def __str__(self):
+		return debugstr('Flags', *[k+'='+str(getattr(self,k)) for k in dir(self) if k[0]!='_'])
 
 class Storage:
 	def __init__(self, name, unregister):
@@ -106,6 +128,7 @@ class Storage:
 		self.open	= True
 
 	def write(self, ob, flags=None):
+		LOG('Swrite', self.name, ob, flags)
 		if not self.open:
 			raise RuntimeError('write to already closed database '+self.name)
 		with LockedFile(self.name) as lock:
@@ -133,13 +156,18 @@ class Storage:
 
 	def close(self, flags=None):
 		self.open	= False
-		self.unregister(self)
+		if self.unregister:
+			self.unregister(self)
+		self.unregister	= None
 
 	def destroy(self, flags=None):
 		o	= self.read()
 		self.close(flags)
 		if not o or (flags and flags.force):
 			unlink(self.name)
+
+	def __str__(self):
+		return debugstr('open' if self.open else 'closed', 'storage', self.name)
 
 class Entrydata:
 	def __init__(self, e, parent, o, key):
@@ -150,9 +178,19 @@ class Entrydata:
 		self.map	= weakref.WeakValueDictionary()
 
 	def get(self, key, default):
+		LOG('Eget', key, default, self.o)
 		if key not in self.o:
 			if default is None:
-				raise KeyError(self.path(key))
+				# Raising is wrong
+				# Creating an empty object is wrong
+				# We should store None here.
+				# On strore later down the road,
+				# we should create the intermediage None-Objects as dicts on the fly.
+				# However accessing it down the road should raise then (in ob())
+				# but only if the parent is None as well.  (Else return None gracefully)
+				# TODO XXX TODO BUG leave that to the future
+#				raise KeyError(self.path(key))
+				default = {}
 			self.o[key] = default
 			self.invalidate(key)
 		if key in self.map:
@@ -162,8 +200,11 @@ class Entrydata:
 		return e
 
 	def set(self, key, val):
+		LOG('Eset', key, val, self.o)
 		if key in self.o and val is self.o[key]:
 			return
+		# TODO XXX TODO BUG storing None should be equivalent to delete
+		# However today this is wrong, as the None then comes back as {}, see bug in .get()
 		self.o[key]	= val
 		self.invalidate(key);
 
@@ -195,36 +236,54 @@ class Entrydata:
 
 class DBdata:
 	def __init__(self, db, parent, store, flags):
+		LOG('Dinit', db, parent, store, flags)
 		self.db		= db
 		self.parent	= parent
 		self.store	= store
 		self.flags	= flags
-		self.o		= store.read(flags)
+		self.name	= store.name
+		self.o		= None
 		self.dirty	= False
 
+	def read(self):
+		self.o		= self.store.read(self.flags)
+
 	def get(self, key):
+		LOG('Dget', key, self.o, self)
 		if key not in self.o:
 			self.o[key]	= {}
 		return Entry(self, self.o, key)
 
 	def path(self, sub):
+		LOG('Ddirt', sub, self)
 		return sub
 
 	def dirt(self, key):
+		LOG('Ddirt', key, self)
 		self.dirty	= True
 
 	def flush(self, flags=None):
+		LOG('Dflush', flags, self)
 		flags	 = self.flags(flags)
 		if self.dirty or flags.force:
 			self.store.write(self.o, flags)
 			self.dirty	= False
 
 	def close(self, flags=None):
+		LOG('Dclose', flags, self)
+		if not self.store:
+			return
 		self.flush(flags)
 		self.store.close(self.flags(flags))
 		self.unregister()
 
+	def discard(self, flags=None):
+		LOG('Ddiscard', flags, self)
+		if self.store and self.dirty:
+			raise RuntimeError('discarding unsaved data: '+self.name)
+
 	def destroy(self, flags=None):
+		LOG('Ddestroy', flags, self)
 		flags	= self.flags(flags)
 		if not flags.unsafe:
 			self.flush(flags)
@@ -232,8 +291,15 @@ class DBdata:
 		self.unregister()
 
 	def unregister(self):
+		LOG('Dunreg', self.store, self)
+		if not self.store:
+			return
+		self.store.close()
 		self.parent.unregister(self.db)
 		self.store	= None
+
+	def __str__(self):
+		return debugstr('DB', 'dirty' if self.dirty else 'clean', self.store if self.store else self.name)
 
 # Helpers for the proxy to access the underlying class instance
 # and not the proxied object
@@ -259,7 +325,7 @@ class Entry:
 	__setitem__	= __setattr__
 	
 	def __delattr__(self, key):
-		Direct(self, 'd').delete(key)
+		_Direct(self, 'd').delete(key)
 	# XXX TODO XXX BUG: support key.sub, as __delattr__ does not handle this correctly
 	__delitem__	= __delattr__
 
@@ -272,7 +338,10 @@ class Entry:
 # This is just a proxy.  The real functionality is defined in DBdata
 class DB:
 	def __init__(self, *args, **kw):
-		_Define(self, 'd', DBdata(self, *args, **kw))
+		d	= DBdata(self, *args, **kw)
+		_Define(self, 'd', d)
+		# Evil can happen now
+		d.read()
 
 	def __setattr__(self, *args):
 		raise RuntimeError('database objects cannot be altered')
@@ -288,8 +357,8 @@ class DB:
 	def __exit__(self, typ, val, tb):
 		_Direct(self, 'd').close();
 
-#	def __del__(self):
-#		_Direct(self, 'd').close();
+	def __del__(self):
+		_Direct(self, 'd').discard();
 
 
 class NoDB:
@@ -315,30 +384,30 @@ class NoDB:
 	def flush(self, db=None, flags=None):
 		flags	= self._flag(flags)
 		if db:
-			_Direct(db, 'flush')(db, flags)
+			_Direct(db, 'd').flush(flags)
 			return self
 		for d in self._dbs:
-			_Direct(d, 'flush')(d, flags)
+			_Direct(d, 'd').flush(flags)
 		return self
 
 	def close(self, db=None, flags=None):
 		flags	= self._flag(flags)
 		if db:
-			_Direct(db, 'close')(db, flags)
+			_Direct(db, 'd').close(flags)
 			return self
 		for d in self._dbs:
-			_Direct(d, 'close')(d, flags)
+			_Direct(d, 'd').close(flags)
 		return self
 
 	def destroy(self, db=None, flags=None):
 		flags	= self._flag(flags)
 		if db:
-			if instanceof(db, s):
+			if isinstance(db, str):
 				db	= self.open(db, flags)
-			_Direct(db, 'destroy')(db, flags)
+			_Direct(db, 'd').destroy(flags)
 			return self
 		for d in self._dbs:
-			_Direct(d, 'destroy')(d, flags)
+			_Direct(d, 'd').destroy(flags)
 		return self
 
 	def _storage(self, name):
@@ -354,7 +423,7 @@ class NoDB:
 		return st
 
 	def _flag(self, flags):
-		return copy.copy(self._flags)(flags)
+		return self._flags(flags)
 
 def main(prog, db, key, val=None):
 	db	= os.path.expanduser(db)
