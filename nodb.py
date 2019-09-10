@@ -46,9 +46,7 @@ import fcntl
 #import itertools
 #from deco import *
 
-def LOG(*args):
-	print(*args, file=sys.stderr)
-	sys.stderr.flush()
+#def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
 
 def resolve(path, name):
 	return os.path.realpath(os.path.join(path, name))
@@ -77,15 +75,12 @@ class LockedFile:
 			self.fd	= None
 
 	def __enter__(self):
-#		LOG("lock enter")
 		return self.lock()
 
 	def __exit__(self, typ, val, tb):
-#		LOG("lock exit", typ, val, tb)
 		self.unlock()
 
 	def __del__(self):
-#		LOG("lock del")
 		self.unlock(True)
 
 class Flags:
@@ -112,36 +107,28 @@ class Storage:
 		self.unregister	= unregister
 
 	def write(self, ob, flags=None):
-#		LOG('S write', self.name, flags)
 		with LockedFile(self.name) as lock:
 			with open(self.name+'.tmp', 'w') as f:
 				json.dump(ob, f)
 				if not flags or not flags.unsafe:
 					f.flush()
-#			LOG('S written')
 			os.rename(self.name+'.tmp', self.name)
-#		LOG('S writedone')
 
 	def read(self, flags=None):
-#		LOG('S read', self.name, flags)
 		if flags and flags.create:
 			try:
 				# this is not entirely correct
 				# as there still is a race
 				with open(self.name, 'x') as f:
 					json.dump({}, f)
-#				LOG('S readcreate')
 				if not flags.unsafe:
 					f.flush()
 			except:
-#				LOG('S notcreated')
 				pass
 		with open(self.name, 'r') as f:
-#			LOG('S reading')
 			return json.load(f)
 
 	def close(self, flags=None):
-#		LOG('S close', self.name)
 		self.name	= None
 		self.unregister(self)
 
@@ -156,11 +143,9 @@ class Entry:
 		_Define(self,	'parent',	parent);
 		_Define(self,	'o',		o[key]);
 		_Define(self,	'key',		key);
-#		LOG('E init', key, o)
 
 	def __getattribute__(self, key, default=None):
 		o	= _Direct(self, 'o')
-#		LOG('E get', _Direct(self,'path')(key), key, o)
 		if key not in o:
 			if default is None:
 				raise KeyError(_Direct(self, 'path')(key))
@@ -170,7 +155,6 @@ class Entry:
 	__getitem__	= __getattribute__
 
 	def __setattr__(self, key, val):
-#		LOG('E set', _Direct(self,'path')(key),'to',val)
 		o	= _Direct(self, 'o')
 		if key in o and val is o[key]:
 			return
@@ -179,7 +163,6 @@ class Entry:
 	__setitem__	= __setattr__
 	
 	def __delattr__(self, key):
-#		LOG('E del', _Direct(self,'path')(key))
 		o	= _Direct(self, 'o')
 		if key not in o:
 			return
@@ -193,11 +176,9 @@ class Entry:
 	def __hash__(self):	return hash(_Direct(self, 'o'))
 
 	def path(self, key):
-#		LOG("E path", _Direct(self, 'key'), key)
 		return _Direct(_Direct(self, 'parent'), 'path')(_Direct(self, 'key'))+'.'+key
 
 	def dirt(self, key):
-#		LOG('E dirt', key)
 		_Direct(_Direct(self, 'parent'), 'dirt')(_Direct(self, 'key')+'.'+key)
 
 class DB:
@@ -206,48 +187,37 @@ class DB:
 		_Define(self, 'flags',	flags)
 		_Define(self, 'o',	store.read(flags))
 		_Define(self, 'dirty',	False)
-#		LOG('DB init', _Direct(self, 'o'), flags)
 
 	def __setattr__(self, *args):
-#		LOG("DB set", args)
 		raise RuntimeError('database objects cannot be altered')
 
 	def __getattribute__(self, key):
 		o	= _Direct(self, 'o')
-#		LOG("DB key", key, o)
 		if key not in o:
-#			LOG("DB key=new")
 			o[key]	= {}
 		return Entry(self, o, key)
 
 	def path(self, sub):
-#		LOG("DB path", sub)
 		return sub;
 
 	def __enter__(self):
-#		LOG("DB enter")
 		return self
 
 	def __exit__(self, typ, val, tb):
-#		LOG("DB exit", typ, val, tb)
 		_Direct(self, 'close')();
 
 #	def __del__(self):
-#		LOG("DB del")
 #		_Direct(self, 'close')();
 
 	def dirt(self, key):
-#		LOG("DB dirt", key)
 		_Define(self, 'dirty', True)
 
 	def close(self, flags=None):
-#		LOG("DB close", flags)
 		flags	 = _Direct(self, 'flags')(flags)
 		if _Direct(self, 'dirty'):
 			_Direct(self, 'store').write(_Direct(self, 'o'), flags)
 		_Direct(self, 'store').close(flags)
 		_Define(self, 'store', None)
-#		LOG("DB closed")
 
 class NoDB:
 	dbs	= []
