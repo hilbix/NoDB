@@ -42,11 +42,9 @@ import sys
 import copy
 import json
 import fcntl
+import weakref
 
-#import itertools
-#from deco import *
-
-#def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
+def LOG(*args): print(*args, file=sys.stderr); sys.stderr.flush()
 
 def resolve(path, name):
 	return os.path.realpath(os.path.join(path, name))
@@ -105,8 +103,11 @@ class Storage:
 			name += '.json'
 		self.name	= name
 		self.unregister	= unregister
+		self.open	= True
 
 	def write(self, ob, flags=None):
+		if not self.open:
+			raise RuntimeError('write to already closed database '+self.name)
 		with LockedFile(self.name) as lock:
 			with open(self.name+'.tmp', 'w') as f:
 				json.dump(ob, f)
@@ -115,6 +116,8 @@ class Storage:
 			os.rename(self.name+'.tmp', self.name)
 
 	def read(self, flags=None):
+		if not self.open:
+			raise RuntimeError('read from already closed database '+self.name)
 		if flags and flags.create:
 			try:
 				# this is not entirely correct
@@ -129,99 +132,168 @@ class Storage:
 			return json.load(f)
 
 	def close(self, flags=None):
-		self.name	= None
+		self.open	= False
 		self.unregister(self)
 
+	def destroy(self, flags=None):
+		o	= self.read()
+		self.close(flags)
+		if not o or (flags and flags.force):
+			unlink(self.name)
+
+class Entrydata:
+	def __init__(self, e, parent, o, key):
+		self.e		= e		# do we need this?
+		self.parent	= parent
+		self.o		= o[key]
+		self.key	= key
+		self.map	= weakref.WeakValueDictionary()
+		LOG('E', key, o)
+
+	def get(self, key, default):
+		if key not in self.o:
+			if default is None:
+				raise KeyError(self.path(key))
+			self.o[key] = default
+			self.invalidate(key)
+		if key in self.map:
+			return self.map[key]
+		e		= Entry(self, self.o, key)
+		self.map[key]	= e
+		return e
+
+	def set(self, key, val):
+		if key in self.o and val is self.o[key]:
+			return
+		self.o[key]	= val
+		self.invalidate(key);
+
+	def delete(self, key):
+		if key not in self.o:
+			return
+		del self.o[key]
+		self.invalidate(key)
+
+	def path(self, key):
+		return self.parent and self.parent.path(self.key)+'.'+key or '..'
+
+	# invalidation blows up
+	def invalidate(self, key=None):
+		if key:
+			self.dirt(key)
+		self.parent	= None
+		for key in self.map:
+			self.map[key].invalidate()
+		self.e		= None
+
+	# dirt falls down, but points to itself
+	def dirt(self, key):
+		if self.parent:
+			self.parent.dirt(self.key+'.'+key)
+
+	def ob(self):
+		LOG('Eo', self.o)
+		return self.o
+
+class DBdata:
+	def __init__(self, db, parent, store, flags):
+		self.db	= db
+		self.parent	= parent
+		self.store	= store
+		self.flags	= flags
+		self.o		= store.read(flags)
+		self.dirty	= False
+
+	def get(self, key):
+		if key not in self.o:
+			self.o[key]	= {}
+		return Entry(self, self.o, key)
+
+	def path(self, sub):
+		return sub
+
+	def dirt(self, key):
+		self.dirty	= True
+
+	def flush(self, flags=None):
+		flags	 = self.flags(flags)
+		if self.dirty or flags.force:
+			self.store.write(self.o, flags)
+			self.dirty	= False
+
+	def close(self, flags=None):
+		self.flush(flags)
+		self.store.close(self.flags(flags))
+		self.unregister()
+
+	def destroy(self, flags=None):
+		flags	= self.flags(flags)
+		if not flags.unsafe:
+			self.flush(flags)
+		self.store.destroy(flags)
+		self.unregister()
+
+	def unregister(self):
+		self.store	= None
+
+# Helpers for the proxy to access the underlying class instance
+# and not the proxied object
 def _Define(c, attr, val):
 	return object.__setattr__(c, attr, val)
 
 def _Direct(c, attr):
 	return object.__getattribute__(c, attr)
 
+# This is just a proxy.  The real functionality is defined in Entrydata
 class Entry:
-	def __init__(self, parent, o, key):
-		_Define(self,	'parent',	parent);
-		_Define(self,	'o',		o[key]);
-		_Define(self,	'key',		key);
+	def __init__(self, *args, **kw):
+		_Define(self, 'd', Entrydata(self, *args, **kw))
 
 	def __getattribute__(self, key, default=None):
-		o	= _Direct(self, 'o')
-		if key not in o:
-			if default is None:
-				raise KeyError(_Direct(self, 'path')(key))
-			o[key] = default
-			_Direct(self, 'dirt')(_Direct(self, 'key'));
-		return Entry(self, o, key)
+		return _Direct(self, 'd').get(key, default)
+	# XXX TODO XXX BUG: support key.sub, as __getattr__ does not handle this correctly
 	__getitem__	= __getattribute__
 
 	def __setattr__(self, key, val):
-		o	= _Direct(self, 'o')
-		if key in o and val is o[key]:
-			return
-		o[key]	= val
-		_Direct(self, 'dirt')(_Direct(self, 'key'));
+		_Direct(self, 'd').set(key, val)
+	# XXX TODO XXX BUG: support key.sub, as __setattr__ does not handle this correctly
 	__setitem__	= __setattr__
 	
 	def __delattr__(self, key):
-		o	= _Direct(self, 'o')
-		if key not in o:
-			return
-		del o[key]
-		_Direct(self, 'dirt')(_Direct(self, 'key'));
+		Direct(self, 'd').delete(key)
+	# XXX TODO XXX BUG: support key.sub, as __delattr__ does not handle this correctly
 	__delitem__	= __delattr__
 
-	def __nonzero__(self):	return bool(_Direct(self, 'o'))
-	def __str__(self):	return str (_Direct(self, 'o'))
-	def __repr__(self):	return repr(_Direct(self, 'o'))
-	def __hash__(self):	return hash(_Direct(self, 'o'))
+	def __nonzero__(self):	return bool(_Direct(self, 'd').ob())
+	def __str__(self):	return str (_Direct(self, 'd').ob())
+	def __repr__(self):	return repr(_Direct(self, 'd').ob())
+	def __hash__(self):	return hash(_Direct(self, 'd').ob())
 
-	def path(self, key):
-		return _Direct(_Direct(self, 'parent'), 'path')(_Direct(self, 'key'))+'.'+key
 
-	def dirt(self, key):
-		_Direct(_Direct(self, 'parent'), 'dirt')(_Direct(self, 'key')+'.'+key)
-
+# This is just a proxy.  The real functionality is defined in DBdata
 class DB:
-	def __init__(self, store, flags):
-		_Define(self, 'store',	store)
-		_Define(self, 'flags',	flags)
-		_Define(self, 'o',	store.read(flags))
-		_Define(self, 'dirty',	False)
+	def __init__(self, *args, **kw):
+		_Define(self, 'd', DBdata(self, *args, **kw))
 
 	def __setattr__(self, *args):
 		raise RuntimeError('database objects cannot be altered')
+	__setitem__	= __setattr__
 
 	def __getattribute__(self, key):
-		o	= _Direct(self, 'o')
-		if key not in o:
-			o[key]	= {}
-		return Entry(self, o, key)
-
-	def path(self, sub):
-		return sub;
+		return _Direct(self, 'd').get(key)
+	__getitem__	= __getattribute__
 
 	def __enter__(self):
 		return self
 
 	def __exit__(self, typ, val, tb):
-		_Direct(self, 'close')();
+		_Direct(self, 'd').close();
 
 #	def __del__(self):
-#		_Direct(self, 'close')();
+#		_Direct(self, 'd').close();
 
-	def dirt(self, key):
-		_Define(self, 'dirty', True)
-
-	def close(self, flags=None):
-		flags	 = _Direct(self, 'flags')(flags)
-		if _Direct(self, 'dirty'):
-			_Direct(self, 'store').write(_Direct(self, 'o'), flags)
-		_Direct(self, 'store').close(flags)
-		_Define(self, 'store', None)
 
 class NoDB:
-	dbs	= []
-
 	def __init__(self, path=None, **flags):
 		if path is None: path='.'
 		self._dbs	= []
@@ -232,15 +304,37 @@ class NoDB:
 	def open(self, name, **flags):
 		name	= resolve(self._path, name)
 		store	= self._storage(name)
-		d	= DB(store, self._flag(flags))
+		d	= DB(self, store, self._flag(flags))
+		self._dbs.append(d)
 		return d
 
-	def close(self, db=None, *args):
+	def flush(self, db=None, flags=None):
+		flags	= self._flag(flags)
 		if db:
-			_Direct(db, 'close')(db)
+			_Direct(db, 'flush')(db, flags)
 			return self
-		for d in self.dbs:
-			_Direct(d, 'close')(d)
+		for d in self._dbs:
+			_Direct(d, 'flush')(d, flags)
+		return self
+
+	def close(self, db=None, flags=None):
+		flags	= self._flag(flags)
+		if db:
+			_Direct(db, 'close')(db, flags)
+			return self
+		for d in self._dbs:
+			_Direct(d, 'close')(d, flags)
+		return self
+
+	def destroy(self, db=None, flags=None):
+		flags	= self._flag(flags)
+		if db:
+			if instanceof(db, s):
+				db	= self.open(db, flags)
+			_Direct(db, 'destroy')(db, flags)
+			return self
+		for d in self._dbs:
+			_Direct(d, 'destroy')(d, flags)
 		return self
 
 	def _storage(self, name):
