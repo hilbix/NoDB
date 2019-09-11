@@ -16,25 +16,25 @@
 # o2.item=1
 # o1['w'].t['f']=2
 # o2.w.t.f=2
-# o1 == o2  # True
-# o1 is o2  # False
+# o1 == o2	# True
+# o1 is o2	# False
 #
 # Flags all default to False:
 #
-# create=True   # Database is created on the fly if not exist
-# unsafe=True   # Database is not flushed on write
-# manual=True   # Database flushing is not implicite
+# create=True	# Database is created on the fly if not exist
+# unsafe=True	# Database is not flushed on write
+# manual=True	# Database flushing is not implicite
 # force=True	# Unconditionally do things
 #
-# nodb = NoDB(flags)
-# nodb.open(file, flags)	  # open another database
-# nodb.flush(db, flags)	   # manually flush, unconditionally re-write database if force==True
-# nodb.flush(None, flags)	 # flush all known databases
-# nodb.close(db, flags)	   # close the handle
-# nodb.close(None, flags)	 # close all known databases
-# nodb.destroy(db, flags)	 # destroy database if empty
-# nodb.destroy(None, flags)   # destroy all known databases
-# nodb.destroy(file, flags)   # drop database if empty.  force=True to destroy even if nonempty
+# no = nodb.NoDB(flags)
+# no.open(file,    flags)	# open another database
+# no.flush(db,     flags)	# manually flush, unconditionally re-write database if force==True
+# no.flush(None,   flags)	# flush all known databases
+# no.close(db,     flags)	# close the handle
+# no.close(None,   flags)	# close all known databases
+# no.destroy(db,   flags)	# destroy database if empty
+# no.destroy(None, flags)	# destroy all known databases
+# no.destroy(file, flags)	# drop database if empty.  force=True to destroy even if nonempty
 #
 # This Works is placed under the terms of the Copyright Less License,
 # see file COPYRIGHT.CLL.  USE AT OWN RISK, ABSOLUTELY NO WARRANTY.
