@@ -58,7 +58,7 @@ Like in JavaScript you can access the same as property or key.  So `table.one` i
 
 ## Features
 
-- Bare minimum (less than 500 lines of code).  I doubt you can make it much smaller, even that it was not designed to minimize size.
+- Bare minimum (less than 700 lines of code).  I doubt you can make it much smaller, even that it was not designed to minimize size.
 - It is able to detect when you forgot a flush.  This raises an exception on program termination.
 - If something breaks on filesystem level while writing the data (disk full, power outage), the existing data should not be harmed.
   - This is done by atomically replacing the existing data with fresh data, only if the fresh data was written successfully.
