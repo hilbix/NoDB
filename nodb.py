@@ -5,9 +5,11 @@
 # It is just a straight forward JSON object storage
 # with an ORM like binding.
 #
-# no = hashfinder.nodb.NoDB()
-# db = no.open('file')
-# t  = b.main
+# import nodb
+#
+# no = nodb.NoDB()
+# db = no.open('file', create=True)
+# t  = db.main
 # o1 = t['object1']
 # o2 = t.object2
 # o1['item']=1
@@ -243,14 +245,14 @@ class Entrydata:
 		LOG('Enotify', key, self)
 		self.dirt(key)
 		for a in self.map:
-			self.map[a].invalidate()
+			_Direct(self.map[a], 'd').invalidate()
 
 	# invalidation blows up
 	def invalidate(self):
 		LOG('Einvalid', self)
 		self.parent	= None
 		for a in self.map:
-			self.map[a].invalidate()
+			_Direct(self.map[a], 'd').invalidate()
 		self.e		= None
 		self.orig	= None
 
